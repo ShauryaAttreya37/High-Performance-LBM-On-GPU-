@@ -36,3 +36,20 @@ def all_backends():
         return [pytest.mark.gpu, pytest.mark.slow] if backend == "cupy" else [pytest.mark.gpu]
 
     return [pytest.param("numpy"), *(pytest.param(b, marks=marks(b)) for b in GPU_BACKENDS)]
+
+
+def compile_to_ptx(source, arch="compute_86"):
+    """Compile CUDA source with NVRTC alone (no GPU or driver context needed).
+
+    Skips the calling test when CuPy's NVRTC bindings are not installed.
+    """
+    import pytest
+
+    nvrtc = pytest.importorskip("cupy_backends.cuda.libs.nvrtc")
+    program = nvrtc.createProgram(source, "kernel.cu", [], [])
+    try:
+        nvrtc.compileProgram(program, [f"-arch={arch}", "--std=c++17"])
+    except Exception as exc:
+        raise AssertionError(f"NVRTC failed:\n{nvrtc.getProgramLog(program)}") from exc
+    ptx = nvrtc.getPTX(program)
+    return ptx.decode() if isinstance(ptx, bytes) else ptx

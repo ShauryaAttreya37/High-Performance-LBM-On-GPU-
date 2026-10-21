@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from lbm.backends import import_cupy
-from lbm.lattice import OPPOSITE_TUPLE, Q, cuda_preamble
+from lbm.lattice import D2Q9, OPPOSITE_TUPLE, Q, cuda_preamble
 from lbm.params import SimulationParams
 from lbm.solver import Solver
 
@@ -59,7 +59,7 @@ def build_kernel_source(variant: str, dtype: str, block: tuple[int, int] = DEFAU
     tile_x, tile_y = block
     return "\n".join(
         [
-            cuda_preamble(_C_TYPES[dtype]),
+            cuda_preamble(D2Q9, _C_TYPES[dtype]),
             f"#define TILE_X {tile_x}",
             f"#define TILE_Y {tile_y}",
             (KERNEL_DIR / "common.cuh").read_text(),

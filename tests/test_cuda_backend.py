@@ -76,27 +76,29 @@ def test_unsupported_kernel_dtype_is_rejected():
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize("vs", list(lattice.LATTICES.values()), ids=list(lattice.LATTICES))
 @pytest.mark.parametrize("c_type", ["float", "double"])
-def test_generated_constants_evaluate_correctly_on_device(c_type):
+def test_generated_constants_evaluate_correctly_on_device(vs, c_type):
     import cupy as cp
 
     source = (
-        lattice.cuda_preamble(c_type)
+        lattice.cuda_preamble(vs, c_type)
         + r"""
     extern "C" __global__ void dump(int* ci, real_t* w) {
         const int i = threadIdx.x;
-        ci[i] = cx(i); ci[9 + i] = cy(i); ci[18 + i] = opp(i); w[i] = weight(i);
+        ci[i] = cx(i); ci[Q + i] = cy(i); ci[2 * Q + i] = cz(i); ci[3 * Q + i] = opp(i);
+        w[i] = weight(i);
     }"""
     )
     kernel = cp.RawModule(code=source).get_function("dump")
-    ci = cp.zeros(27, dtype=cp.int32)
-    w = cp.zeros(9, dtype=cp.float32 if c_type == "float" else cp.float64)
-    kernel((1,), (9,), (ci, w))
-    ci = ci.get()
-    np.testing.assert_array_equal(ci[:9], lattice.CX)
-    np.testing.assert_array_equal(ci[9:18], lattice.CY)
-    np.testing.assert_array_equal(ci[18:], lattice.OPPOSITE)
-    np.testing.assert_allclose(w.get(), lattice.W, rtol=1e-7 if c_type == "float" else 1e-16)
+    ci = cp.zeros(4 * vs.q, dtype=cp.int32)
+    w = cp.zeros(vs.q, dtype=cp.float32 if c_type == "float" else cp.float64)
+    kernel((1,), (vs.q,), (ci, w))
+    ci = ci.get().reshape(4, vs.q)
+    for axis in range(3):
+        np.testing.assert_array_equal(ci[axis], vs.component(axis))
+    np.testing.assert_array_equal(ci[3], vs.opposite)
+    np.testing.assert_allclose(w.get(), vs.w_array, rtol=1e-7 if c_type == "float" else 1e-16)
 
 
 @pytest.mark.gpu
