@@ -1,0 +1,51 @@
+[project]
+name = "lbm-gpu"
+version = "0.1.0"
+description = "D2Q9 lattice Boltzmann solver with a NumPy reference and hand-written CUDA kernels driven from Python"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0,<2.6",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+# CUDA backends: CuPy compiles the .cu kernels at runtime through NVRTC,
+# so no system-wide CUDA toolkit (nvcc) is required, only the NVIDIA driver.
+gpu = [
+    "cupy-cuda13x>=14",
+    "cuda-toolkit[cudart,nvrtc]==13.*",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lbm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "gpu: needs CuPy and a CUDA device (skipped automatically otherwise)",
+    "slow: long validation runs (deselect with -m 'not slow')",
+]
+
+[tool.coverage.run]
+source = ["lbm"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "NPY"]

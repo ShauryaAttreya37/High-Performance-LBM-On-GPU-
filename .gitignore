@@ -1,0 +1,27 @@
+# Local-only learning material: theory notes, design specs, plans
+docs/
+
+# Generated simulation and benchmark output
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor / agent settings
+.vscode/
+.idea/
+.claude/
