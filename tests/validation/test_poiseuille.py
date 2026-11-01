@@ -58,3 +58,20 @@ def test_float32_trt_stays_at_single_precision_level(backend):
     # Measured ~1.6e-5: float32 round-off accumulated over ~10^4 steps of a small force.
     result = run_poiseuille(tau=0.8, collision="trt", backend=backend, dtype="float32")
     assert result.l2_error < 1e-4
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["numpy", *(pytest.param(b, marks=pytest.mark.gpu) for b in ("cuda-naive", "cuda-aa"))],
+)
+@pytest.mark.parametrize("tau", [0.6, 2.0])
+def test_3d_slab_trt_is_exact_like_2d(backend, tau):
+    # Measured ~3e-13 (D3Q19, nz = 4) on every backend, same as the 2D channel.
+    result = run_poiseuille(tau=tau, collision="trt", backend=backend, nz=4)
+    assert result.l2_error < ROUND_OFF
+
+
+def test_3d_slab_bgk_slip_equals_the_2d_slip():
+    slab = run_poiseuille(tau=1.5, collision="bgk", nz=4)
+    channel = run_poiseuille(tau=1.5, collision="bgk")
+    np.testing.assert_allclose(slab.u, channel.u, rtol=1e-11)

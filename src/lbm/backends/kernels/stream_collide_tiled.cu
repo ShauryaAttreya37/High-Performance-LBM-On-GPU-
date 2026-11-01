@@ -13,17 +13,25 @@
 // answers that, not this comment.
 //
 // TILE_X and TILE_Y are #defined by CudaSolver and must equal blockDim.
+//
+// 2D only (CudaSolver refuses it for 3D grids). The signature matches the
+// other variants so one argument list serves all of them; nz is always 1 and
+// force_z always 0. A 3D halo tile would load (TILE_X+2)(TILE_Y+2)*3 values
+// per TILE_X*TILE_Y nodes, about 4x the useful data, for a variant that
+// already loses to naive in 2D.
+static_assert(!THREE_D, "the tiled kernel is 2D only");
 
 extern "C" __global__ void stream_collide_tiled(
     const real_t* __restrict__ f_src,
     real_t* __restrict__ f_dst,
     const unsigned char* __restrict__ solid,
     const real_t* __restrict__ wall_u,
-    const int nx, const int ny,
+    const real_t* __restrict__ force_field,
+    const int nx, const int ny, const int nz,
     const real_t omega_plus, const real_t omega_minus,
-    const real_t force_x, const real_t force_y)
+    const real_t force_x, const real_t force_y, const real_t force_z)
 {
-    const Relaxation r{omega_plus, omega_minus, force_x, force_y};
+    Relaxation r{omega_plus, omega_minus, force_x, force_y, force_z};
     constexpr int HX = TILE_X + 2;  // tile width including the halo
     constexpr int HY = TILE_Y + 2;
     __shared__ real_t tile[Q][HY][HX];
@@ -46,13 +54,16 @@ extern "C" __global__ void stream_collide_tiled(
     __syncthreads();
 
     const int x = x0 + tx, y = y0 + ty;
-    if (x >= nx || y >= ny || solid_tile[ty + 1][tx + 1]) return;
+    if (x >= nx || y >= ny || solid_tile[ty + 1][tx + 1] == SOLID) return;
+    if (solid_tile[ty + 1][tx + 1] == FORCED) {
+        add_local_force(r, force_field, (size_t)y * nx + x, n_nodes);
+    }
 
     real_t f[Q];
 #pragma unroll
     for (int i = 0; i < Q; ++i) {
         const int sx = tx + 1 - cx(i), sy = ty + 1 - cy(i);
-        if (solid_tile[sy][sx]) {
+        if (solid_tile[sy][sx] == SOLID) {
             const size_t src = (size_t)wrap(y - cy(i), ny) * nx + wrap(x - cx(i), nx);
             f[i] = tile[opp(i)][ty + 1][tx + 1] + wall_term(i, wall_u, src, n_nodes);
         } else {

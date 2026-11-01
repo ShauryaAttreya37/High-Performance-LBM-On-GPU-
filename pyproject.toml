@@ -23,6 +23,9 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.6",
 ]
+figures = [
+    "juliacall>=0.9.37",
+]
 
 [build-system]
 requires = ["hatchling"]

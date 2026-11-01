@@ -20,60 +20,74 @@ Writing n_i = f_i - f_i^eq for the non-equilibrium part, this is::
 
 which is the form used here and, line for line, in the CUDA kernels.
 BGK is the case omega_minus = omega_plus, where it collapses to
-f*_i = f_i - omega (f_i - f_i^eq) + S_i.
+f*_i = f_i - omega (f_i - f_i^eq) + S_i. Nothing in it depends on the
+dimension: D2Q9 and D3Q19 differ only in their velocity sets.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 import numpy as np
 
 from lbm.equilibrium import equilibrium
 from lbm.forcing import guo_source
-from lbm.lattice import CX_TUPLE, CY_TUPLE, OPPOSITE_TUPLE, Q
-
-_OPPOSITE = list(OPPOSITE_TUPLE)
+from lbm.lattice import VelocitySet
 
 
-def momentum(f):
-    """First moments (sum_i c_ix f_i, sum_i c_iy f_i) of a population array."""
-    jx = sum(CX_TUPLE[i] * f[i] for i in range(Q) if CX_TUPLE[i] != 0)
-    jy = sum(CY_TUPLE[i] * f[i] for i in range(Q) if CY_TUPLE[i] != 0)
-    return jx, jy
+def momentum(lattice: VelocitySet, f) -> tuple:
+    """First moments (sum_i c_ia f_i for each axis a) of a population array."""
+    return tuple(
+        sum(c_a * f[i] for i, c_a in enumerate(lattice.component(axis)) if c_a)
+        for axis in range(lattice.d)
+    )
 
 
-def pre_collision_moments(f, force, xp=np):
+def pre_collision_moments(lattice: VelocitySet, f, force: Sequence[float]):
     """Density deviation and Guo-corrected velocity from streamed populations.
 
     Returns:
-        ``(delta_rho, ux, uy)`` where rho = 1 + delta_rho and
-        rho u = sum_i c_i f_i + F/2.
+        ``(delta_rho, u)`` with rho = 1 + delta_rho, ``u`` a tuple of d
+        components, and rho u = sum_i c_i f_i + F/2.
     """
     delta_rho = f.sum(axis=0)
     rho = 1.0 + delta_rho
-    jx, jy = momentum(f)
-    fx, fy = force
-    return delta_rho, (jx + 0.5 * fx) / rho, (jy + 0.5 * fy) / rho
+    u = tuple((j_a + 0.5 * f_a) / rho for j_a, f_a in zip(momentum(lattice, f), force, strict=True))
+    return delta_rho, u
 
 
-def collide(f, omega_plus, omega_minus, force, xp=np):
-    """Apply one TRT + Guo collision to every node of ``f`` (shape ``(Q, ...)``).
+def collide(
+    lattice: VelocitySet,
+    f,
+    omega_plus: float,
+    omega_minus: float,
+    force: Sequence[float],
+    xp=np,
+):
+    """Apply one TRT + Guo collision to every node of ``f`` (shape ``(q, ...)``).
 
     Args:
+        lattice: Velocity set.
         f: Shifted populations after streaming and boundary handling.
         omega_plus: Symmetric relaxation rate, 1/tau.
         omega_minus: Antisymmetric relaxation rate (equal to omega_plus for BGK).
-        force: Uniform body-force density (Fx, Fy).
+        force: Body-force density, d components, each a scalar or a field-shaped array.
         xp: Array namespace.
 
     Returns:
         New array of post-collision shifted populations; ``f`` is not modified.
     """
-    delta_rho, ux, uy = pre_collision_moments(f, force, xp)
-    non_eq = f - equilibrium(delta_rho, ux, uy, xp)
-    non_eq_opp = non_eq[_OPPOSITE]
+    delta_rho, u = pre_collision_moments(lattice, f, force)
+    non_eq = f - equilibrium(lattice, delta_rho, u, xp)
+    non_eq_opp = non_eq[list(lattice.opposite)]
     post = (
         f - (0.5 * omega_plus) * (non_eq + non_eq_opp) - (0.5 * omega_minus) * (non_eq - non_eq_opp)
     )
-    if tuple(force) != (0.0, 0.0):
-        post = post + guo_source(ux, uy, force, omega_plus, omega_minus, xp)
+    if any(not _is_zero(f_a) for f_a in force):
+        post = post + guo_source(lattice, u, force, omega_plus, omega_minus, xp)
     return post
+
+
+def _is_zero(value) -> bool:
+    """True for a scalar zero force component; arrays always count as a force."""
+    return isinstance(value, int | float) and value == 0.0

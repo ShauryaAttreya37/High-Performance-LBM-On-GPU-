@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from lbm.lattice import D2Q9, D3Q19
 from lbm.params import SimulationParams, StabilityWarning
 
 
@@ -113,3 +114,82 @@ def test_fluid_mask_is_complement_of_solid():
     solid[0] = True
     p = make(solid=solid)
     np.testing.assert_array_equal(p.fluid, ~solid)
+
+
+# ---------------------------------------------------------------- dimension and lattice
+
+
+def make_3d(**overrides):
+    base = {"nx": 8, "ny": 6, "nz": 5, "tau": 0.8}
+    base.update(overrides)
+    return SimulationParams(**base)
+
+
+def test_2d_defaults_to_d2q9_with_yx_shape():
+    p = make()
+    assert p.d == 2
+    assert p.lattice is D2Q9
+    assert p.shape == (6, 8)
+
+
+def test_3d_defaults_to_d3q19_with_zyx_shape():
+    p = make_3d()
+    assert p.d == 3
+    assert p.lattice is D3Q19
+    assert p.shape == (5, 6, 8)
+    assert p.solid.shape == (5, 6, 8)
+    assert p.wall_velocity.shape == (3, 5, 6, 8)
+    assert p.force == (0.0, 0.0, 0.0)
+
+
+def test_lattice_can_be_named_or_passed_directly():
+    assert make(lattice="D2Q9").lattice is D2Q9
+    assert make_3d(lattice=D3Q19).lattice is D3Q19
+
+
+@pytest.mark.parametrize(
+    "build", [lambda: make(lattice="D3Q19"), lambda: make_3d(lattice="D2Q9")], ids=["2d", "3d"]
+)
+def test_lattice_dimension_must_match_grid(build):
+    with pytest.raises(ValueError, match="lattice"):
+        build()
+
+
+def test_unknown_lattice_is_rejected():
+    with pytest.raises(ValueError, match="unknown lattice"):
+        make(lattice="D2Q37")
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda: make(force=(1e-5, 0.0, 0.0)), lambda: make_3d(force=(1e-5, 0.0))],
+    ids=["2d-given-3", "3d-given-2"],
+)
+def test_force_needs_one_component_per_dimension(build):
+    with pytest.raises(ValueError, match="force"):
+        build()
+
+
+@pytest.mark.parametrize("nz", [0, -2])
+def test_non_positive_nz_is_rejected(nz):
+    with pytest.raises(ValueError, match="nz"):
+        make_3d(nz=nz)
+
+
+def test_3d_masks_are_validated_against_zyx_shape():
+    with pytest.raises(ValueError, match="solid"):
+        make_3d(solid=np.zeros((6, 8), dtype=bool))
+    with pytest.raises(ValueError, match="wall_velocity"):
+        make_3d(wall_velocity=np.zeros((2, 5, 6, 8)))
+
+
+def test_3d_wall_velocity_is_zeroed_on_fluid_nodes():
+    solid = np.zeros((5, 6, 8), dtype=bool)
+    solid[:, -1, :] = True
+    p = make_3d(solid=solid, wall_velocity=np.ones((3, 5, 6, 8)))
+    assert np.all(p.wall_velocity[:, :, -1, :] == 1.0)
+    assert np.all(p.wall_velocity[:, :, :-1, :] == 0.0)
+
+
+def test_3d_force_is_normalised_to_float_tuple():
+    assert make_3d(force=np.array([1, 2, 3])).force == (1.0, 2.0, 3.0)

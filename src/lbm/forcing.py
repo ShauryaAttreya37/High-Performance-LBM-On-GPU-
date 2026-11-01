@@ -1,4 +1,4 @@
-"""Guo forcing scheme for a body-force density F.
+"""Guo forcing scheme for a body-force density F, for any velocity set.
 
 Guo, Zheng & Shi (2002) showed that adding a body force correctly to second
 order needs two changes:
@@ -26,22 +26,31 @@ With omega_plus == omega_minus this reduces to the BGK formula above.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
-from lbm.lattice import CX_TUPLE, CY_TUPLE, W_TUPLE, Q
+from lbm.equilibrium import dot
+from lbm.lattice import VelocitySet
 
 
-def guo_source(ux, uy, force, omega_plus, omega_minus, xp=np):
-    """Source term S_i for a uniform force, shape ``(Q, *ux.shape)``."""
-    fx, fy = force
-    u_dot_f = ux * fx + uy * fy
+def guo_source(
+    lattice: VelocitySet,
+    u: Sequence,
+    force: Sequence[float],
+    omega_plus: float,
+    omega_minus: float,
+    xp=np,
+):
+    """Source term S_i for a uniform force, shape ``(q, *u[0].shape)``."""
+    u_dot_f = sum(u_a * f_a for u_a, f_a in zip(u, force, strict=True))
     a_plus = 1.0 - 0.5 * omega_plus
     a_minus = 1.0 - 0.5 * omega_minus
     terms = []
-    for i in range(Q):
-        c_dot_f = CX_TUPLE[i] * fx + CY_TUPLE[i] * fy
-        c_dot_u = CX_TUPLE[i] * ux + CY_TUPLE[i] * uy
+    for c_i, w_i in zip(lattice.c, lattice.w, strict=True):
+        c_dot_f = dot(c_i, force)
+        c_dot_u = dot(c_i, u)
         symmetric = 9.0 * c_dot_u * c_dot_f - 3.0 * u_dot_f
         antisymmetric = 3.0 * c_dot_f
-        terms.append(W_TUPLE[i] * (a_plus * symmetric + a_minus * antisymmetric))
+        terms.append(w_i * (a_plus * symmetric + a_minus * antisymmetric))
     return xp.stack(terms)

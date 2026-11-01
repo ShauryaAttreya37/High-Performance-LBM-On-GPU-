@@ -114,12 +114,8 @@ def test_velocity_set_rejects_inconsistent_definitions():
         VelocitySet("bad", 1, ((0,), (1,), (-1,)), (0.5, 0.1, 0.1))
 
 
-def test_transitional_d2q9_aliases_match():
-    # Kept until every physics module takes a VelocitySet (build step 3).
-    assert D2Q9.component(0) == lattice.CX_TUPLE
-    assert D2Q9.component(1) == lattice.CY_TUPLE
-    assert D2Q9.w == lattice.W_TUPLE
-    assert D2Q9.opposite == lattice.OPPOSITE_TUPLE
+def test_sound_speed_constant_is_shared_by_every_lattice():
+    assert all(vs.cs2 == lattice.CS2 for vs in LATTICES.values())
 
 
 @ALL

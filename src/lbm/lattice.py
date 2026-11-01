@@ -158,21 +158,8 @@ def default_lattice(d: int) -> VelocitySet:
     return _DEFAULT_BY_DIMENSION[d]
 
 
-# ---- Transitional D2Q9 aliases ------------------------------------------------
-# Used by the physics modules until they take a VelocitySet (build step 3 of the
-# dimension-generic refactor); removed then.
-Q = D2Q9.q
-D = D2Q9.d
-CS2 = D2Q9.cs2
-CX_TUPLE = D2Q9.component(0)
-CY_TUPLE = D2Q9.component(1)
-W_TUPLE = D2Q9.w
-OPPOSITE_TUPLE = D2Q9.opposite
-CX = _read_only(CX_TUPLE, np.int64)
-CY = _read_only(CY_TUPLE, np.int64)
-W = D2Q9.w_array
-OPPOSITE = _read_only(OPPOSITE_TUPLE, np.int64)
-# -------------------------------------------------------------------------------
+CS2 = 1.0 / 3.0
+"""Squared lattice speed of sound; the same for every supported velocity set."""
 
 
 def _accessor(return_type: str, name: str, values) -> str:

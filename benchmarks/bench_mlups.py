@@ -1,13 +1,19 @@
 """Throughput (MLUPS) and achieved memory bandwidth of every backend.
 
-LBM is memory-bound: each node update does ~200 floating-point operations but
-must move at least 9 populations in and 9 out. The honest performance metric
-is therefore how close a kernel gets to the GPU's DRAM bandwidth:
+LBM is memory-bound: each node update does a few hundred floating-point
+operations but must move at least Q populations in and Q out. The honest
+performance metric is therefore how close a kernel gets to the GPU's DRAM
+bandwidth:
 
     MLUPS                = million lattice-node updates per second
-    bytes per update     = 2 * Q * sizeof(real_t)     (72 B in float32)
+    bytes per update     = 2 * Q * sizeof(real_t)     (float32: 72 B D2Q9, 152 B D3Q19)
     achieved bandwidth   = MLUPS * 1e6 * bytes per update
     peak bandwidth       = measured device-to-device copy (read + write)
+
+A laptop GPU changes its memory clock with its power state, so the copy peak
+itself moves between runs (by ~25 % on the RTX 3050). The peak is therefore
+re-measured right before every kernel measurement, and the fraction of that
+peak is the number to compare.
 
 Grids small enough to fit in the L2 cache can exceed DRAM bandwidth; the
 table flags them, since that number says nothing about large problems.
@@ -17,6 +23,7 @@ Usage::
     python benchmarks/bench_mlups.py
     python benchmarks/bench_mlups.py --sizes 512 1024 2048 --dtype float64 --plot
     python benchmarks/bench_mlups.py --backends numpy cupy cuda-aa --sizes 256 512
+    python benchmarks/bench_mlups.py --dim 3 --backends cuda-naive cuda-aa --sizes 64 128 256
 
 Results go to ``outputs/benchmarks/`` (CSV, and a PNG with ``--plot``).
 """
@@ -33,7 +40,8 @@ import numpy as np
 
 from lbm import SimulationParams, make_solver
 from lbm.backends import BACKENDS, available_backends, import_cupy
-from lbm.lattice import Q
+from lbm.backends.cuda_solver import TWO_D_ONLY
+from lbm.lattice import default_lattice
 
 OUTPUT = Path("outputs/benchmarks")
 TARGET_SECONDS = 1.0
@@ -44,11 +52,13 @@ TARGET_SECONDS = 1.0
 class Measurement:
     backend: str
     dtype: str
+    dim: int
     size: int
     steps: int
     seconds: float
     mlups: float
     bandwidth_gbs: float
+    peak_gbs: float
     fraction_of_peak: float
     fits_in_l2: bool
 
@@ -99,36 +109,48 @@ def _timed_run(solver, steps: int) -> float:
     return time.perf_counter() - start
 
 
-def measure(backend: str, size: int, dtype: str, peak_gbs: float, l2_bytes: int) -> Measurement:
-    """Benchmark one backend on a fully periodic size x size grid."""
-    params = SimulationParams(nx=size, ny=size, tau=0.8, collision="trt", dtype=dtype)
+def grid_params(size: int, dim: int, dtype: str) -> SimulationParams:
+    """Fully periodic size^dim grid."""
+    sizes = {"nx": size, "ny": size} | ({"nz": size} if dim == 3 else {})
+    return SimulationParams(**sizes, tau=0.8, collision="trt", dtype=dtype)
+
+
+def measure(backend: str, size: int, dim: int, dtype: str, l2_bytes: int) -> Measurement:
+    """Benchmark one backend on a fully periodic size^dim grid."""
+    params = grid_params(size, dim, dtype)
     solver = make_solver(params, backend=backend)
     rng = np.random.default_rng(0)
-    solver.initialize(1.0, *(0.01 * rng.standard_normal((2, size, size))))
+    velocity = (0.01 * rng.standard_normal(params.shape) for _ in range(dim))
+    solver.initialize(1.0, *velocity)
 
     # Warm up (kernel compilation, caches), then size the timed run to ~TARGET_SECONDS.
     probe = 2 * solver.step_multiple
     _timed_run(solver, probe)
     per_step = _timed_run(solver, probe) / probe
     steps = solver.step_multiple * max(1, round(TARGET_SECONDS / per_step / solver.step_multiple))
+    peak_gbs = peak_copy_bandwidth() if backend != "numpy" else 0.0
     seconds = _timed_run(solver, steps)
 
     del solver
     _release_gpu_memory(backend)
 
+    q = params.lattice.q
+    nodes = size**dim
     itemsize = np.dtype(dtype).itemsize
-    mlups = size * size * steps / seconds / 1e6
-    bandwidth = mlups * 1e6 * 2 * Q * itemsize / 1e9
+    mlups = nodes * steps / seconds / 1e6
+    bandwidth = mlups * 1e6 * 2 * q * itemsize / 1e9
     return Measurement(
         backend=backend,
         dtype=dtype,
+        dim=dim,
         size=size,
         steps=steps,
         seconds=seconds,
         mlups=mlups,
         bandwidth_gbs=bandwidth,
+        peak_gbs=peak_gbs,
         fraction_of_peak=bandwidth / peak_gbs if peak_gbs else float("nan"),
-        fits_in_l2=Q * size * size * itemsize <= l2_bytes,
+        fits_in_l2=q * nodes * itemsize <= l2_bytes,
     )
 
 
@@ -139,7 +161,7 @@ def write_csv(results: list[Measurement], path: Path) -> None:
         writer.writerows(asdict(r) for r in results)
 
 
-def plot(results: list[Measurement], peak_gbs: float, path: Path) -> None:
+def plot(results: list[Measurement], path: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -151,10 +173,13 @@ def plot(results: list[Measurement], peak_gbs: float, path: Path) -> None:
         sizes = [r.size for r in rows]
         ax_mlups.plot(sizes, [r.mlups for r in rows], "o-", label=backend)
         ax_bw.plot(sizes, [r.bandwidth_gbs for r in rows], "o-", label=backend)
-    ax_bw.axhline(peak_gbs, color="k", ls="--", label=f"copy peak {peak_gbs:.0f} GB/s")
+    peaks = [r.peak_gbs for r in results if r.peak_gbs]
+    if peaks:
+        ax_bw.axhspan(min(peaks), max(peaks), color="k", alpha=0.12, label="copy peak (range)")
+    dim = results[0].dim
     for ax in (ax_mlups, ax_bw):
         ax.set_xscale("log", base=2)
-        ax.set_xlabel("grid size N (N x N nodes)")
+        ax.set_xlabel(f"grid size N ({' x '.join(['N'] * dim)} nodes)")
         ax.grid(alpha=0.3)
     ax_mlups.set(ylabel="MLUPS", title="Throughput")
     ax_mlups.set_yscale("log")
@@ -168,25 +193,32 @@ def main(argv=None) -> None:
     gpu_backends = [b for b in BACKENDS if b.startswith("cuda") or b == "cupy"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--backends", nargs="+", default=gpu_backends, choices=BACKENDS)
-    parser.add_argument("--sizes", type=int, nargs="+", default=[256, 512, 1024, 2048, 4096])
+    parser.add_argument("--dim", type=int, default=2, choices=(2, 3))
+    parser.add_argument("--sizes", type=int, nargs="+", default=None)
     parser.add_argument("--dtype", default="float32", choices=("float32", "float64"))
     parser.add_argument("--plot", action="store_true")
     args = parser.parse_args(argv)
+    if args.sizes is None:
+        args.sizes = [256, 512, 1024, 2048, 4096] if args.dim == 2 else [64, 96, 128, 192, 256]
+    if args.dim == 3:
+        skipped = [b for b in args.backends if b.removeprefix("cuda-") in TWO_D_ONLY]
+        if skipped:
+            print(f"skipping 2D-only backends in 3D: {skipped}")
+        args.backends = [b for b in args.backends if b not in skipped]
 
     unavailable = set(args.backends) - set(available_backends())
     if unavailable:
         raise SystemExit(f"backends not available on this machine: {sorted(unavailable)}")
 
     has_gpu = any(b != "numpy" for b in args.backends)
-    peak = peak_copy_bandwidth() if has_gpu else 0.0
     l2 = l2_cache_bytes() if has_gpu else 0
     if has_gpu:
         cp = import_cupy()
         name = cp.cuda.runtime.getDeviceProperties(cp.cuda.Device().id)["name"].decode()
-        print(f"{name}: copy bandwidth {peak:.1f} GB/s, L2 cache {l2 / 2**20:.1f} MiB")
+        print(f"{name}: L2 cache {l2 / 2**20:.1f} MiB, {default_lattice(args.dim).name}")
 
     for backend in (b for b in args.backends if b.startswith("cuda")):
-        tiny = make_solver(SimulationParams(nx=8, ny=8, tau=0.8, dtype=args.dtype), backend)
+        tiny = make_solver(grid_params(8, args.dim, args.dtype), backend)
         for name, res in tiny.kernel_resources().items():
             print(
                 f"  {name:>22}: {res['registers']:3d} registers/thread, "
@@ -195,11 +227,11 @@ def main(argv=None) -> None:
 
     out_of_memory = _out_of_memory_error(args.backends)
     results = []
-    print(f"{'backend':>11} {'N':>6} {'MLUPS':>9} {'GB/s':>8} {'% peak':>7}  note")
+    print(f"{'backend':>11} {'N':>6} {'MLUPS':>9} {'GB/s':>8} {'peak':>7} {'% peak':>7}  note")
     for backend in args.backends:
         for size in args.sizes:
             try:
-                r = measure(backend, size, args.dtype, peak, l2)
+                r = measure(backend, size, args.dim, args.dtype, l2)
             except out_of_memory:
                 _release_gpu_memory(backend)
                 print(f"{backend:>11} {size:6d}  skipped: out of device memory")
@@ -208,17 +240,17 @@ def main(argv=None) -> None:
             note = "lattice fits in L2" if r.fits_in_l2 else ""
             print(
                 f"{backend:>11} {size:6d} {r.mlups:9.1f} {r.bandwidth_gbs:8.1f} "
-                f"{100 * r.fraction_of_peak:6.1f}%  {note}"
+                f"{r.peak_gbs:7.1f} {100 * r.fraction_of_peak:6.1f}%  {note}"
             )
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    tag = "_".join([args.dtype, *args.backends])
+    tag = "_".join([f"{args.dim}d", args.dtype, *args.backends])
     csv_path = OUTPUT / f"mlups_{tag}.csv"
     write_csv(results, csv_path)
     print(f"results written to {csv_path}")
     if args.plot:
         png_path = OUTPUT / f"bandwidth_{tag}.png"
-        plot(results, peak, png_path)
+        plot(results, png_path)
         print(f"figure written to {png_path}")
 
 

@@ -13,6 +13,11 @@ wall sits at a tau-dependent position, which shows up as a slip velocity that
 grows with tau. TRT with Lambda = 3/16 makes the wall land exactly halfway for
 every tau, so the error drops to round-off. BGK is also exact at the single
 tau where (tau - 1/2)^2 = 3/16, i.e. tau = 1/2 + sqrt(3)/4.
+
+With ``nz`` set the same flow runs in 3D as a slab between two plates,
+periodic in x and z. The exact solution is unchanged, and so is the
+statement that TRT is exact to round-off: the D3Q19 links that cross the
+plates obey the same one-dimensional balance as the D2Q9 ones.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from lbm.lattice import CS2
 from lbm.params import SimulationParams
 
 CHANNEL_LENGTH = 4
-"""Nodes along x; the flow is uniform in x, so a short periodic strip suffices."""
+"""Nodes along x (and z in 3D); the flow is uniform there, so a short periodic strip suffices."""
 
 BGK_EXACT_TAU = 0.5 + math.sqrt(3.0) / 4.0
 """The one BGK relaxation time with (tau - 1/2)^2 = 3/16 (exact wall placement)."""
@@ -64,6 +69,7 @@ def run_poiseuille(
     max_velocity: float = 0.01,
     tol: float | None = None,
     max_steps: int = 500_000,
+    nz: int | None = None,
 ) -> PoiseuilleResult:
     """Run to steady state and compare with the analytical parabola.
 
@@ -77,6 +83,7 @@ def run_poiseuille(
         tol: Steady-state threshold on the change of u / u_max per check
             interval. Defaults to a level just above round-off for ``dtype``.
         max_steps: Give up after this many steps.
+        nz: Nodes along z for the 3D slab (D3Q19); ``None`` runs the 2D channel.
     """
     ny = height + 2
     viscosity = CS2 * (tau - 0.5)
@@ -84,17 +91,23 @@ def run_poiseuille(
     params = SimulationParams(
         nx=CHANNEL_LENGTH,
         ny=ny,
+        nz=nz,
         tau=tau,
         collision=collision,
-        force=(force, 0.0),
-        solid=channel_walls(CHANNEL_LENGTH, ny),
+        force=(force, 0.0) if nz is None else (force, 0.0, 0.0),
+        solid=channel_walls(CHANNEL_LENGTH, ny, nz),
         dtype=dtype,
     )
     solver = make_solver(params, backend=backend)
     solver.initialize()
 
+    def mean_profile(s):
+        # Average over x (and z): ux is indexed [y, x] or [z, y, x].
+        ux = s.macroscopic().ux[..., 1:-1, :]
+        return ux.mean(axis=-1) if ux.ndim == 2 else ux.mean(axis=(0, 2))
+
     def profile(s):
-        return s.macroscopic().ux[1:-1].mean(axis=1) / max_velocity
+        return mean_profile(s) / max_velocity
 
     if tol is None:
         tol = 1e-12 if dtype == "float64" else 1e-6
@@ -103,7 +116,7 @@ def run_poiseuille(
     steps = run_until_steady(solver, profile, interval=interval, tol=tol, max_steps=max_steps)
 
     y = np.arange(1, ny - 1) - 0.5
-    u = solver.macroscopic().ux[1:-1].mean(axis=1)
+    u = mean_profile(solver)
     return PoiseuilleResult(
         y=y, u=u, u_exact=exact_profile(y, height, force, viscosity), steps=steps
     )
