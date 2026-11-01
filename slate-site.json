@@ -1,0 +1,52 @@
+{
+  "docs": [
+    {
+      "binds": 0,
+      "build": {
+        "bundle": false,
+        "charttheme": "",
+        "history": false,
+        "outputs": "all",
+        "override": false,
+        "renderer": "",
+        "slate": "1.11.1",
+        "source": true,
+        "theme": "dark",
+        "width": 900
+      },
+      "cells": 27,
+      "code": 12,
+      "date": "2026-11-01",
+      "description": "This project is a lattice Boltzmann fluid solver for 2D and 3D flow, written in Python and CUDA C++. On a laptop RTX 3050 it performs about 2,130 million lattice updates per second, roughly 98.5 % of what the card's…",
+      "id": "b2bf5569-a6a9-4815-87ed-366283bbc135",
+      "image": "",
+      "md": 15,
+      "packages": [],
+      "runnable": false,
+      "slug": "a-gpu-fluid-simulator-explained",
+      "source": "/home/shaurya/Documents/Projects/High_Performance LBM (On GPU)/explainer/lbm_explainer.jl",
+      "title": "A GPU fluid simulator, explained",
+      "updated": "2026-11-01"
+    }
+  ],
+  "title": "A GPU fluid simulator, explained",
+  "home": true,
+  "homeDoc": {
+    "build": {
+      "bundle": false,
+      "charttheme": "",
+      "history": false,
+      "outputs": "all",
+      "override": false,
+      "renderer": "",
+      "slate": "1.11.1",
+      "source": true,
+      "theme": "dark",
+      "width": 900
+    },
+    "id": "b2bf5569-a6a9-4815-87ed-366283bbc135",
+    "path": "/home/shaurya/Documents/Projects/High_Performance LBM (On GPU)/explainer/lbm_explainer.jl",
+    "source": "/home/shaurya/Documents/Projects/High_Performance LBM (On GPU)/explainer/lbm_explainer.jl",
+    "title": "A GPU fluid simulator, explained"
+  }
+}
